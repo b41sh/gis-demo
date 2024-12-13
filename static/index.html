@@ -1,0 +1,115 @@
+<!doctype html>
+<html>
+  <head>
+    <meta
+      name="viewport"
+      content="initial-scale=1,maximum-scale=1,user-scalable=no"
+    />
+    <title>Gis demo</title>
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    />
+    <link
+      rel="stylesheet"
+      href="https://cdn.bootcdn.net/ajax/libs/jquery-confirm/3.3.4/jquery-confirm.min.css"
+    />
+    <link
+      rel="stylesheet"
+      href="https://cdn.maptiler.com/maptiler-sdk-js/v2.3.0/maptiler-sdk.css"
+    />
+
+    <script src="https://cdn.bootcdn.net/ajax/libs/jquery/3.7.1/jquery.min.js"></script>
+    <script src="https://cdn.bootcdn.net/ajax/libs/jquery-confirm/3.3.4/jquery-confirm.min.js"></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.maptiler.com/maptiler-sdk-js/v2.3.0/maptiler-sdk.umd.js"></script>
+    <script src="https://cdn.maptiler.com/leaflet-maptilersdk/v2.0.0/leaflet-maptilersdk.js"></script>
+    <style>
+      #map {
+        height: 680px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="map"></div>
+    <script>
+      const key = "YOUR_MAPTILER_API_KEY_HERE";
+      const map = L.map("map").setView([39.9829904, 116.3051313], 13);
+      const mtLayer = L.maptilerLayer({
+        apiKey: key,
+        style: L.MaptilerStyle.STREETS,
+      }).addTo(map);
+
+      var start = null;
+      var end = null;
+      $.getJSON("/api/show", function (data) {
+        var items = [];
+        console.log(data);
+
+        $.each(data, function (index, geo_json) {
+          console.log(geo_json.geometry.coordinates[0]);
+          var polygon = L.polygon(geo_json.geometry.coordinates[0], {
+            color: "red",
+          }).addTo(map);
+          polygon.bindTooltip(geo_json.properties.name, { permanent: true });
+          polygon.on("click", function (val) {
+            var point = val.latlng;
+
+            $.confirm({
+              title: "选择操作",
+              content: "",
+              buttons: {
+                start: {
+                  text: "设为起点",
+                  btnClass: "btn-blue",
+                  keys: ["enter", "shift"],
+                  action: function () {
+                    start = point;
+                  },
+                },
+                end: {
+                  text: "设为终点",
+                  btnClass: "btn-blue",
+                  keys: ["enter", "shift"],
+                  action: function () {
+                    end = point;
+                    console.log(start);
+                    console.log(end);
+                    let sx = start.lng;
+                    let sy = start.lat;
+                    let ex = end.lng;
+                    let ey = end.lat;
+
+                    $.getJSON(
+                      "/api/distance?sx=" +
+                        sx +
+                        "&sy=" +
+                        sy +
+                        "&ex=" +
+                        ex +
+                        "&ey=" +
+                        ey,
+                      function (data) {
+                        console.log("距离是: " + data + " 千米");
+                        $.alert("距离是: " + data + " 千米");
+                      },
+                    );
+                  },
+                },
+                area: {
+                  text: "周边美食",
+                  btnClass: "btn-blue",
+                  keys: ["enter", "shift"],
+                  action: function () {
+                    console.log("todo");
+                  },
+                },
+              },
+            });
+          });
+        });
+      });
+    </script>
+  </body>
+</html>
+

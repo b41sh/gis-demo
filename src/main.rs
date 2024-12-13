@@ -11,6 +11,8 @@
 // limitations under the License.
 
 use databend_driver::Client;
+use databend_driver::Error;
+use databend_driver::RowIterator;
 use rocket::fs::relative;
 use rocket::fs::FileServer;
 use rocket::fs::Options;
@@ -21,18 +23,9 @@ use rocket::routes;
 use rocket::serde::json::Json;
 use std::str::FromStr;
 
-#[get("/show")]
-async fn show_api() -> Json<Vec<serde_json::Value>> {
-    let dsn = "databend://root:@127.0.0.1:8000/default?sslmode=disable".to_string();
-
-    let client = Client::new(dsn);
-    let conn = client.get_conn().await.unwrap();
-
-    let sql = "select * from poi";
-    let values = conn.query_iter(sql).await;
-
+async fn read_poi_values(row_iter: Result<RowIterator, Error>) -> serde_json::Value {
     let mut pois = vec![];
-    if let Ok(mut rows) = values {
+    if let Ok(mut rows) = row_iter {
         while let Some(row) = rows.next().await {
             if let Ok(row) = row {
                 let osm_id = i64::try_from(row.values().first().unwrap().clone()).unwrap();
@@ -40,24 +33,55 @@ async fn show_api() -> Json<Vec<serde_json::Value>> {
                 let fclass = String::try_from(row.values().get(2).unwrap().clone()).unwrap();
                 let name = String::try_from(row.values().get(3).unwrap().clone()).unwrap();
 
-                let geo = String::try_from(row.values().get(4).unwrap().clone()).unwrap();
-                let geo_value = serde_json::Value::from_str(&geo).unwrap();
+                let geo_str = String::try_from(row.values().get(4).unwrap().clone()).unwrap();
+                let geo = serde_json::Value::from_str(&geo_str).unwrap();
+                let geo = geo.as_object().unwrap().clone();
 
-                let mut properties = serde_json::Map::new();
-                properties.insert("osm_id".to_string(), osm_id.into());
-                properties.insert("code".to_string(), code.into());
-                properties.insert("fclass".to_string(), fclass.into());
-                properties.insert("name".to_string(), name.into());
+                let mut points = Vec::new();
+                let coords = geo
+                    .get("coordinates")
+                    .unwrap()
+                    .as_array()
+                    .unwrap()
+                    .first()
+                    .unwrap()
+                    .as_array()
+                    .unwrap();
+                for coord in coords {
+                    let point = vec![coord.get(1).unwrap().clone(), coord.get(0).unwrap().clone()];
+                    points.push(serde_json::Value::Array(point));
+                }
+
                 let mut geo_map = serde_json::Map::new();
-                geo_map.insert("type".to_string(), "Feature".into());
-                geo_map.insert("geometry".to_string(), geo_value);
-                geo_map.insert("properties".to_string(), properties.into());
-
+                geo_map.insert("osm_id".to_string(), osm_id.into());
+                geo_map.insert("code".to_string(), code.into());
+                geo_map.insert("fclass".to_string(), fclass.into());
+                geo_map.insert("name".to_string(), name.into());
+                geo_map.insert("geom".to_string(), points.into());
                 let poi = serde_json::Value::Object(geo_map);
                 pois.push(poi);
             }
         }
     }
+    pois.into()
+}
+
+#[get("/show?<fclass>")]
+async fn show_api(fclass: Option<String>) -> Json<serde_json::Value> {
+    let dsn = "databend://root:@127.0.0.1:8000/default?sslmode=disable".to_string();
+
+    let client = Client::new(dsn);
+    let conn = client.get_conn().await.unwrap();
+
+    //let sql = "select * from poi where osm_id = 1021568339";
+    let sql = if let Some(fclass) = fclass {
+        format!("select * from poi where fclass='{}'", fclass)
+    } else {
+        "select * from poi".to_string()
+    };
+    let row_iter = conn.query_iter(&sql).await;
+    let pois = read_poi_values(row_iter).await;
+
     Json(pois)
 }
 
@@ -99,10 +123,33 @@ async fn distance_api(
     Json(distance.into())
 }
 
+//   http://127.0.0.1:7000/api/nearby?sx=1.0&sy=1.0
+#[get("/nearby?<sx>&<sy>")]
+async fn nearby_api(sx: Option<f64>, sy: Option<f64>) -> Json<serde_json::Value> {
+    let dsn = "databend://root:@127.0.0.1:8000/default?sslmode=disable".to_string();
+
+    let client = Client::new(dsn);
+    let conn = client.get_conn().await.unwrap();
+
+    let sx = sx.unwrap();
+    let sy = sy.unwrap();
+
+    // convert srid from 4326 to 3857
+    // distance less than 5km museums.
+    let sql = format!(
+        "select * from poi where fclass='museum' and st_distance(st_transform(st_makegeompoint({}, {}), 4326, 3857), st_transform(geo, 4326, 3857)) < 5000",
+        sx, sy
+    );
+    let row_iter = conn.query_iter(&sql).await;
+    let pois = read_poi_values(row_iter).await;
+
+    Json(pois)
+}
+
 #[launch]
 fn rocket() -> _ {
     rocket::build()
         .configure(rocket::Config::figment().merge(("port", 7001)))
         .mount("/", FileServer::new(relative!("static"), Options::Index))
-        .mount("/api", routes![show_api, distance_api])
+        .mount("/api", routes![show_api, distance_api, nearby_api])
 }
